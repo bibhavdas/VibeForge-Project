@@ -1045,7 +1045,7 @@ function initEmployees(){
         <td style="display:flex;align-items:center;gap:10px;">
            ${avatarHTML}
            <span style="font-weight: 500; flex: 1;">${e.name}</span>
-<button class="msg-icon-btn" onclick="event.stopPropagation(); window.openChatWith('${admin.empId}')">             <svg viewBox="0 0 24 24"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+<button class="msg-icon-btn" onclick="event.stopPropagation(); window.openChatWith('${e.empId}')">             <svg viewBox="0 0 24 24"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
            </button>
         </td>
         <td>${e.empId}</td>
