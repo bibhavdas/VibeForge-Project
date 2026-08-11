@@ -544,15 +544,12 @@ function renderProfileView(userObj) {
           deleteBtn.onclick = async () => handleAccountDeletion(userObj, true);
       }
   } else if (CURRENT_USER.role === "admin") {
-      // Admin viewing someone else's profile: CANNOT edit their details, 
-      // but can still remove user data or promote them to admin.
+      // Admin viewing someone else's profile
       actionsDiv.style.display = "flex";
       editBtn.style.display = "none"; // <-- Disabled editing for other profiles
       
       if (deleteBtn) {
-          deleteBtn.style.display = "inline-block";
-          deleteBtn.textContent = "Remove User Data";
-          deleteBtn.onclick = async () => handleAccountDeletion(userObj, false);
+          deleteBtn.style.display = "none"; // <-- Completely removes the delete option for admins
       }
       
       if (promoteBtn) {
