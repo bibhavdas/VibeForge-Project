@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Alignt — Sign in</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<section id="auth-screen" class="auth-screen">
+  <div class="auth-brand">
+    <div class="brand-mark">
+      <span class="brand-dot"></span> Alignt
+    </div>
+    <h1 class="auth-tagline">Every workday,<br>perfectly aligned.</h1>
+    <p class="auth-sub">A calmer way to run onboarding, attendance, leave and payroll — for teams who'd rather spend the day working than chasing paperwork.</p>
+
+    <div id="badge-canvas-wrap" class="badge-canvas-wrap">
+      <canvas id="badge-canvas"></canvas>
+      <button id="punch-btn" class="punch-btn" type="button">Tap the badge</button>
+    </div>
+  </div>
+
+  <div class="auth-panel">
+    <div class="auth-card">
+      <div class="auth-tabs" role="tablist">
+        <button class="auth-tab is-active" data-tab="signin" type="button" role="tab" aria-selected="true">Sign in</button>
+        <button class="auth-tab" data-tab="signup" type="button" role="tab" aria-selected="false">Sign up</button>
+      </div>
+
+      <!-- Sign in -->
+      <form id="signin-form" class="auth-form is-active" autocomplete="off">
+        <label class="field">
+          <span>Work email</span>
+          <input type="email" id="signin-email" placeholder="you@company.com" required>
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <div style="position:relative;">
+            <input type="password" id="signin-password" placeholder="••••••••" required style="width:100%; padding-right:38px;">
+            <button type="button" class="pwd-toggle" tabindex="-1" style="position:absolute; right:10px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; color:var(--muted); padding:0; display:flex; align-items:center;">
+              <svg viewBox="0 0 24 24" style="width:18px;height:18px;"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+        </label>
+        <p class="field-error" id="signin-error" hidden>Enter a valid email and password to continue.</p>
+        <div class="role-toggle" data-role-toggle>
+          <button type="button" class="role-opt is-active" data-role="employee">Employee</button>
+          <button type="button" class="role-opt" data-role="admin">HR / Admin</button>
+        </div>
+        <button type="submit" class="btn-primary" id="signin-submit">Sign in</button>
+      </form>
+
+      <!-- Sign up -->
+      <form id="signup-form" class="auth-form" autocomplete="off">
+        <label class="field">
+          <span>Full name</span>
+          <input type="text" id="signup-name" placeholder="Sneha Roy" required>
+        </label>
+        <label class="field" style="display:none;">
+          <span>Employee ID</span>
+          <input type="text" id="signup-empid" placeholder="EMP-0042">
+        </label>
+        <label class="field">
+          <span>Work email</span>
+          <input type="email" id="signup-email" placeholder="you@company.com" required>
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <div style="position:relative;">
+            <input type="password" id="signup-password" placeholder="8+ characters, 1 number" required minlength="8" style="width:100%; padding-right:38px;">
+            <button type="button" class="pwd-toggle" tabindex="-1" style="position:absolute; right:10px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; color:var(--muted); padding:0; display:flex; align-items:center;">
+              <svg viewBox="0 0 24 24" style="width:18px;height:18px;"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+        </label>
+        <div class="role-toggle" data-role-toggle-signup>
+          <button type="button" class="role-opt is-active" data-role="employee">Employee</button>
+          <button type="button" class="role-opt" data-role="admin">HR / Admin</button>
+        </div>
+        <button type="submit" class="btn-primary">Create account</button>
+      </form>
+    </div>
+  </div>
+</section>
+
+<div class="toast" id="toast"></div>
+
+<!-- Scripts -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js"></script>
+<script src="notify.js"></script>
+<script src="shared.js"></script>
+
+<!-- Firebase and Auth (Modules) -->
+<script type="module" src="firebase.js"></script>
+<script type="module" src="auth.js"></script>
+</body>
+</html>
