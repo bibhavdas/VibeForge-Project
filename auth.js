@@ -1,4 +1,4 @@
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendEmailVerification, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendEmailVerification, signOut, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { doc, setDoc, getDoc, collection, getDocs } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { auth, db } from "./firebase.js";
 
@@ -77,6 +77,39 @@ function initAuth(){
     });
   });
 
+  // --- PASSWORD RECOVERY ---
+  const forgotPwdLink = $("#forgot-password-link");
+  if (forgotPwdLink) {
+      forgotPwdLink.addEventListener("click", async (e) => {
+          e.preventDefault();
+          const email = $("#signin-email").value.trim();
+          const errorEl = $("#signin-error");
+          
+          if (!email) {
+              errorEl.textContent = "Please enter your work email in the box above first.";
+              errorEl.hidden = false;
+              return;
+          }
+          
+          try {
+              // Firebase handles generating and sending the secure reset token
+              await sendPasswordResetEmail(auth, email);
+              
+              playNotiSound();
+              if (typeof Notify !== "undefined") {
+                  Notify.notify({ type: "success", title: "Email Sent", message: "Check your inbox for a password reset link." });
+              } else {
+                  toast("Password reset email sent.", "success");
+              }
+              errorEl.hidden = true;
+          } catch (error) {
+              console.error("Reset Password Error:", error.code);
+              errorEl.textContent = "Failed to send reset link. Make sure the email is registered.";
+              errorEl.hidden = false;
+          }
+      });
+  }
+  
   // --- REAL FIREBASE SIGN IN ---
   $("#signin-form").addEventListener("submit", e => {
     e.preventDefault();

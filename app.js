@@ -113,8 +113,12 @@ let dashBadge = null;
 let currentView = "dashboard";
 
 function initApp(role){
+  // 1. Read the current view from the URL (default to dashboard if blank)
+  const urlParams = new URLSearchParams(window.location.search);
+  const initialView = urlParams.get('view') || "dashboard";
+
   // Setup Back Button Navigation
-  window.history.replaceState({ view: "dashboard" }, "", "?view=dashboard");
+  window.history.replaceState({ view: initialView }, "", "?view=" + initialView);
   window.addEventListener("popstate", (e) => {
       if (e.state && e.state.view) {
           switchView(e.state.view, false);
@@ -165,18 +169,29 @@ function initApp(role){
   initProfileEdit(); 
   initLeave(); 
 
-  // NEW: Digital Presence Detection (Tab Open/Closed Only)
+  // Digital Presence Detection
   const userRef = doc(db, "users", CURRENT_USER.email);
-  
-  // Set online when they load the dashboard
-  updateDoc(userRef, { isOnline: true }).catch(e => console.warn(e));
+  const setOnline = () => updateDoc(userRef, { isOnline: true, lastActive: Date.now() }).catch(e => console.warn(e));
+  const setOffline = () => updateDoc(userRef, { isOnline: false }).catch(e => console.warn(e));
 
-  // ONLY fire when closing the tab or window completely
-  window.addEventListener("beforeunload", () => {
-      updateDoc(userRef, { isOnline: false }).catch(e => console.warn(e));
+  setOnline();
+
+  document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") {
+          setOffline();
+      } else {
+          setOnline();
+      }
   });
 
-  switchView("dashboard");
+  setInterval(() => {
+      if (document.visibilityState === "visible") setOnline();
+  }, 30000);
+
+  window.addEventListener("pagehide", setOffline);
+
+  // 2. Load the view we found in the URL instead of defaulting to dashboard
+  switchView(initialView, false);
 }
 
 function switchView(view, pushHistory = true){
@@ -186,8 +201,10 @@ function switchView(view, pushHistory = true){
 
   const titles = {
     dashboard: "Dashboard", profile: "Profile", attendance: "Attendance",
-    leave: "Leave", payroll: "Payroll", employees: "Employees", approvals: "Approvals"
+    leave: "Leave", payroll: "Payroll", employees: "Employees", approvals: "Approvals",
+    "admin-chats": "Global Chat Audit" // <--- Add this line
   };
+
   $("#view-title").textContent = titles[view] || view;
 
   $$(".view").forEach(sec => {
@@ -203,6 +220,7 @@ function switchView(view, pushHistory = true){
       window.history.pushState({ view: view }, "", "?view=" + view);
   }
 
+  if (view === "profile") renderProfileView(CURRENT_USER);
   if (view === "approvals" && CURRENT_USER.role === "admin") renderAdminLeaves();
   if (view === "leave") renderEmployeeLeaves();
   if (view === "employees" && CURRENT_USER.role === "admin") initEmployees();
@@ -258,6 +276,11 @@ function setupRealtimeListeners(role) {
               Object.assign(data, patch); 
           }
 
+          // Generate today's date string (YYYY-MM-DD)
+          const todayStr = new Date().toLocaleDateString("en-CA");
+          const attendanceMap = data.attendance || {};
+          const realTodayStatus = attendanceMap[todayStr] || "absent";
+
           if (data.id === CURRENT_USER.email) {
               const prevStatus = CURRENT_USER.status;
               
@@ -270,7 +293,10 @@ function setupRealtimeListeners(role) {
               CURRENT_USER.avatarData = data.avatarData || null;
               CURRENT_USER.coverData = data.coverData || null;
               CURRENT_USER.empId = data.empId;
-              CURRENT_USER.status = data.status || "absent";
+              
+              // Apply the attendance map and check if they punched in TODAY
+              CURRENT_USER.attendance = attendanceMap;
+              CURRENT_USER.status = realTodayStatus;
               CURRENT_USER.role = data.role; 
 
               $("#topbar-username").textContent = CURRENT_USER.name;
@@ -288,13 +314,19 @@ function setupRealtimeListeners(role) {
                   isFirstLoad = false;
               }
 
-              if ($("#profile-edit-grid") && $("#profile-edit-grid").hidden && $("#profile-name-main").textContent === CURRENT_USER.name) {
-                  renderProfileView(CURRENT_USER);
+              // FIX: Correctly check the current view and ensure we aren't in edit mode before re-rendering
+              if (currentView === "profile" && document.getElementById("profile-name-main")?.textContent === CURRENT_USER.name) {
+                  const saveBtn = document.getElementById("save-profile-btn");
+                  if (!saveBtn || saveBtn.hidden) {
+                      renderProfileView(CURRENT_USER);
+                  }
               }
 
               if (prevStatus !== CURRENT_USER.status && currentView === "attendance") renderCalendar();
           }
-          return { ...data, status: data.status || "absent" };
+          
+          // Return the true status for today so Admin tables are accurate!
+          return { ...data, status: realTodayStatus, attendance: attendanceMap };
       });
 
       EMPLOYEES.sort((a,b) => (a.name || "").localeCompare(b.name || ""));
@@ -403,12 +435,22 @@ function renderActivity(logs, role) {
 /* ---------------------------------------------------------
    Punch in/out (dashboard)
    --------------------------------------------------------- */
+/* ---------------------------------------------------------
+   Punch in/out (dashboard)
+   --------------------------------------------------------- */
 async function handlePunch(){
-  // Use punched_out instead of absent so they stay present for the day
   const newStatus = punched ? "punched_out" : "present";
+  const todayStr = new Date().toLocaleDateString("en-CA");
   
   try {
-      await setDoc(doc(db, "users", CURRENT_USER.email), { status: newStatus }, { merge: true });
+      // Properly nest the map so Firestore merges it correctly inside 'attendance'
+      await setDoc(doc(db, "users", CURRENT_USER.email), { 
+          status: newStatus,
+          attendance: {
+              [todayStr]: newStatus 
+          }
+      }, { merge: true });
+      
       await logActivity(newStatus === "present" ? "Punched in" : "Punched out for the day");
       
       dashBadge.flip();
@@ -782,6 +824,7 @@ function renderCalendar(range = "month"){
     const isFuture = cellTime > todayStart;
     const isWeekend = d.getDay() === 0 || d.getDay() === 6;
     
+    const dateStr = d.toLocaleDateString("en-CA");
     let status = "";
     
     if (cellTime < joinStart) {
@@ -790,11 +833,10 @@ function renderCalendar(range = "month"){
         status = ""; 
     } else if (isWeekend) {
         status = "weekend"; 
-    } else if (cellTime === todayStart) {
-        // Treat both present and punched_out as green/present on the calendar
-        status = (CURRENT_USER.status === "present" || CURRENT_USER.status === "punched_out") ? "present" : "absent";
     } else {
-        status = "absent"; 
+        // Look up the specific day in the user's saved history
+        const dayRecord = CURRENT_USER.attendance ? CURRENT_USER.attendance[dateStr] : null;
+        status = (dayRecord === "present" || dayRecord === "punched_out") ? "present" : "absent";
     }
 
     cell.className = "cal-cell" + (status ? ` ${status}` : "");
@@ -1081,9 +1123,10 @@ function renderAdminSidebar() {
     // Filter only for HR/Admins
     const admins = EMPLOYEES.filter(e => e.role === "admin");
     
-    // Split into Online and Offline arrays using the new presence detection
-    const onlineAdmins = admins.filter(a => a.isOnline === true);
-    const offlineAdmins = admins.filter(a => a.isOnline !== true);
+    // Split into Online and Offline arrays using the 60-second heartbeat check
+    const now = Date.now();
+    const onlineAdmins = admins.filter(a => a.isOnline && (now - (a.lastActive || 0) < 60000));
+    const offlineAdmins = admins.filter(a => !a.isOnline || (now - (a.lastActive || 0) >= 60000));
 
     if (onlineCount) onlineCount.textContent = onlineAdmins.length;
     if (offlineCount) offlineCount.textContent = offlineAdmins.length;
@@ -1162,9 +1205,10 @@ initApp(session.role);
    --------------------------------------------------------- */
 let chatUnsubscribe = null;
 let currentChatEmpId = null;
+let currentChatTab = "short"; // Tracks which inbox we are looking at
 let allMessages = [];
-let lastMsgSoundTime = 0; // Cooldown tracker
-let isFirstMessageLoad = true; // Prevents notification spam on first page load
+let lastMsgSoundTime = 0; 
+let isFirstMessageLoad = true; 
 
 function getMiniAvatar(emp) {
     if (!emp) return '';
@@ -1173,15 +1217,34 @@ function getMiniAvatar(emp) {
       : `<div style="width:32px;height:32px;border-radius:50%;background:${getAvatarColor(emp.name)};color:#fff;display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:600;">${initialsOf(emp.name)}</div>`;
 }
 
+// Global Tab Click Listener
+document.addEventListener("click", (e) => {
+    if (e.target.classList.contains("chat-tab")) {
+        document.querySelectorAll(".chat-tab").forEach(t => {
+            t.style.borderBottomColor = "transparent";
+            t.style.color = "var(--muted)";
+        });
+        e.target.style.borderBottomColor = "var(--brand)";
+        e.target.style.color = "var(--brand)";
+        
+        currentChatTab = e.target.dataset.tab;
+        
+        // Reset the main view when switching inboxes
+        currentChatEmpId = null;
+        if ($("#chat-active-state")) $("#chat-active-state").style.display = "none";
+        if ($("#chat-empty-state")) $("#chat-empty-state").style.display = "flex";
+        if ($("#chat-formal-composer")) $("#chat-formal-composer").style.display = "none";
+        if ($("#chat-search-wrap")) $("#chat-search-wrap").hidden = false;
+        
+        renderChatSidebar();
+    }
+});
+
 onSnapshot(query(collection(db, "messages"), orderBy("ts", "asc")), (snapshot) => {
-    // Map with document ID so we can update the 'read' status later
     allMessages = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-    
-    const convoMap = new Map();
     let unreadCount = 0;
     let playSound = false;
 
-    // 1. Check for brand new messages to trigger the sound
     snapshot.docChanges().forEach(change => {
         if (change.type === "added" && !isFirstMessageLoad) {
             const msg = change.doc.data();
@@ -1192,17 +1255,10 @@ onSnapshot(query(collection(db, "messages"), orderBy("ts", "asc")), (snapshot) =
     });
     isFirstMessageLoad = false;
 
-    // 2. Process all messages for the Sidebar
     allMessages.forEach(msg => {
-        if (msg.sender === CURRENT_USER.empId || msg.receiver === CURRENT_USER.empId) {
-            const otherId = msg.sender === CURRENT_USER.empId ? msg.receiver : msg.sender;
-            convoMap.set(otherId, msg); 
-        }
-        
-        // Count unread messages
         if (msg.receiver === CURRENT_USER.empId && !msg.read) {
-            // Auto-read if we are currently looking at this chat
-            if (currentView === "messages" && currentChatEmpId === msg.sender) {
+            const msgType = msg.type || "short";
+            if (currentView === "messages" && currentChatEmpId === msg.sender && currentChatTab === msgType) {
                 updateDoc(doc(db, "messages", msg.id), { read: true }).catch(e => console.warn(e));
             } else {
                 unreadCount++;
@@ -1210,38 +1266,55 @@ onSnapshot(query(collection(db, "messages"), orderBy("ts", "asc")), (snapshot) =
         }
     });
 
-    // 3. Update the Navigation Badge
     const badge = $("#nav-msg-badge");
     if (badge) {
         badge.textContent = unreadCount > 99 ? "99+" : unreadCount;
         badge.hidden = unreadCount === 0;
     }
 
-    // 4. Play the sound (with 10-second cooldown)
     if (playSound && Date.now() - lastMsgSoundTime > 10000) {
         lastMsgSoundTime = Date.now();
         notiSound.play().catch(e => console.warn(e));
-        if (typeof Notify !== "undefined") {
-            Notify.toast("New message received", { type: "info" });
-        }
+        if (typeof Notify !== "undefined") Notify.toast("New message received", { type: "info" });
     }
 
-    // 5. Render the left sidebar list
+    renderChatSidebar();
+    if (currentChatEmpId) renderChatHistory(currentChatEmpId);
+    if (CURRENT_USER.role === "admin") renderAdminGlobalChats();
+});
+
+function renderChatSidebar() {
     const list = $("#chat-convo-list");
     if (!list) return;
     list.innerHTML = "";
+    
+    const convoMap = new Map();
+    
+    allMessages.forEach(msg => {
+        const msgType = msg.type || "short";
+        if (msgType !== currentChatTab) return; // Strict separation for chat history!
+
+        if (msg.sender === CURRENT_USER.empId || msg.receiver === CURRENT_USER.empId || msg.cc === CURRENT_USER.empId) {
+            let otherId = msg.sender === CURRENT_USER.empId ? msg.receiver : msg.sender;
+            if (msg.cc === CURRENT_USER.empId && msg.sender !== CURRENT_USER.empId) otherId = msg.sender;
+            
+            convoMap.set(otherId, msg); 
+        }
+    });
 
     const sortedConvos = Array.from(convoMap.entries()).sort((a, b) => b[1].ts - a[1].ts);
+    
     sortedConvos.forEach(([otherId, latestMsg]) => {
         const targetEmp = EMPLOYEES.find(e => e.empId === otherId);
         if (!targetEmp) return;
 
         const div = document.createElement("div");
         div.className = `chat-convo ${currentChatEmpId === otherId ? "is-active" : ""}`;
-        let preview = latestMsg.text || "📎 Image Attached";
+        
+        let preview = latestMsg.text || "📎 Attached File";
+        if (latestMsg.type === "formal" && latestMsg.subject) preview = "Subject: " + latestMsg.subject;
         if (latestMsg.sender === CURRENT_USER.empId) preview = "You: " + preview;
 
-        // Bold the text and add a red line if unread
         const isUnread = latestMsg.receiver === CURRENT_USER.empId && !latestMsg.read;
         if (isUnread) div.style.borderLeft = "4px solid var(--absent)";
 
@@ -1252,67 +1325,111 @@ onSnapshot(query(collection(db, "messages"), orderBy("ts", "asc")), (snapshot) =
                <div class="chat-convo-preview" style="${isUnread ? 'color:var(--ink); font-weight:600;' : ''}">${preview}</div>
             </div>
         `;
-        div.onclick = () => openChatWith(otherId);
+        // FIX 1: Explicitly target the window object to prevent ReferenceErrors
+        div.onclick = () => window.openChatWith(otherId);
         list.appendChild(div);
     });
-
-    if (currentChatEmpId) renderChatHistory(currentChatEmpId);
-});
+}
 
 window.openChatWith = function(empId) {
-    switchView("messages");
+    if (currentView !== "messages") switchView("messages"); // Prevents the window flick!
     currentChatEmpId = empId;
     const targetEmp = EMPLOYEES.find(e => e.empId === empId);
-    const emptyState = $("#chat-empty-state");
-    const activeState = $("#chat-active-state");
-    const searchWrap = $("#chat-search-wrap");
     
-    if(emptyState) emptyState.style.display = "none";
-    if(activeState) activeState.style.display = "flex";
-    if(searchWrap) searchWrap.hidden = true;
+    // FIX 1: Safely check if elements exist before modifying them to prevent crashes!
+    if ($("#chat-empty-state")) $("#chat-empty-state").style.display = "none";
+    if ($("#chat-active-state")) $("#chat-active-state").style.display = "flex";
+    if ($("#chat-search-wrap")) $("#chat-search-wrap").hidden = true;
+    if ($("#chat-current-name")) $("#chat-current-name").textContent = targetEmp ? targetEmp.name : empId;
     
-    const currentName = $("#chat-current-name");
-    if(currentName) currentName.textContent = targetEmp ? targetEmp.name : empId;
+    if ($("#chat-formal-composer")) $("#chat-formal-composer").style.display = "none";
+    if ($("#chat-form")) $("#chat-form").style.display = (currentChatTab === "formal") ? "none" : "flex";
     
     $$(".chat-convo").forEach(el => el.classList.remove("is-active"));
-    const activeConvoEl = Array.from($$(".chat-convo")).find(el => el.innerHTML.includes(targetEmp?.name));
+    const nameToFind = targetEmp ? targetEmp.name : empId;
+    const activeConvoEl = Array.from($$(".chat-convo")).find(el => el.innerHTML.includes(nameToFind));
     if (activeConvoEl) activeConvoEl.classList.add("is-active");
 
     renderChatHistory(empId);
 };
 
-$("#chat-compose-btn")?.addEventListener("click", () => {
-    switchView("messages");
-    currentChatEmpId = null;
-    const emptyState = $("#chat-empty-state");
-    const activeState = $("#chat-active-state");
-    const searchWrap = $("#chat-search-wrap");
-    const currentName = $("#chat-current-name");
-    const chatInput = $("#chat-recipient");
+function renderChatHistory(targetEmpId) {
     const historyBox = $("#chat-history");
-    
-    if(emptyState) emptyState.style.display = "none";
-    if(activeState) activeState.style.display = "flex";
-    if(currentName) currentName.textContent = "New Message";
-    if(searchWrap) searchWrap.hidden = false;
-    if(chatInput) {
-        chatInput.value = "";
-        chatInput.focus();
-    }
-    if(historyBox) historyBox.innerHTML = `<div style="text-align: center; color: var(--muted); font-size: .85rem; margin-top: auto;">Search for a coworker to start chatting.</div>`;
-    
-    $$(".chat-convo").forEach(el => el.classList.remove("is-active"));
-});
+    if(!historyBox) return;
+    historyBox.innerHTML = "";
+    let hasMessages = false;
 
-const chatInputEl = $("#chat-recipient");
-const autocompleteBox = $("#chat-autocomplete");
+    allMessages.forEach(msg => {
+        // FIX 2: Stop Formal and Casual messages from leaking into each other!
+        const msgType = msg.type || "short";
+        if (msgType !== currentChatTab) return; 
 
-chatInputEl?.addEventListener("input", (e) => {
+        const isDirect = (msg.sender === CURRENT_USER.empId && msg.receiver === targetEmpId) || (msg.sender === targetEmpId && msg.receiver === CURRENT_USER.empId);
+        const isCc = (msg.cc === CURRENT_USER.empId && msg.sender === targetEmpId); 
+        
+        if (isDirect || isCc) {
+            if (msg.receiver === CURRENT_USER.empId && !msg.read) {
+                updateDoc(doc(db, "messages", msg.id), { read: true }).catch(e => console.warn(e));
+            }
+            
+            hasMessages = true;
+            const isSent = msg.sender === CURRENT_USER.empId;
+            const bubble = document.createElement("div");
+            bubble.className = `chat-bubble ${isSent ? "sent" : "received"}`;
+            
+            let contentHTML = "";
+            
+            if (msg.type === "formal") {
+                const ccEmp = msg.cc ? EMPLOYEES.find(e => e.empId === msg.cc) : null;
+                const ccName = ccEmp ? ccEmp.name : (msg.cc || "None");
+                
+                // CSS Pattern Background Logic
+                let bgStyle = "background: var(--paper-2);";
+                if (msg.theme === "geo") {
+                    bgStyle = "background: linear-gradient(135deg, rgba(220, 231, 117, 0.4) 50%, rgba(139, 195, 74, 0.4) 50%);";
+                } else if (msg.theme === "mosaic") {
+                    bgStyle = "background: repeating-linear-gradient(45deg, rgba(139, 195, 74, 0.15) 25%, transparent 25%, transparent 75%, rgba(139, 195, 74, 0.15) 75%, rgba(139, 195, 74, 0.15)), repeating-linear-gradient(45deg, rgba(139, 195, 74, 0.15) 25%, rgba(241, 248, 233, 0.4) 25%, rgba(241, 248, 233, 0.4) 75%, rgba(139, 195, 74, 0.15) 75%, rgba(139, 195, 74, 0.15)); background-position: 0 0, 10px 10px; background-size: 20px 20px;";
+                }
+                
+                // Content sits on a frosted white card over the pattern for readability
+                contentHTML += `
+                <div style="${bgStyle} padding:16px; border-radius:8px; margin-bottom:6px; text-align:left; border:1px solid var(--line); overflow: hidden; position: relative; min-width: 250px;">
+                    <div style="background: rgba(255, 255, 255, 0.95); padding: 16px; border-radius: 6px; box-shadow: var(--shadow-sm); border: 1px solid rgba(0,0,0,0.05);">
+                        <div style="font-size: 0.85rem; border-bottom: 1px solid var(--line); padding-bottom: 8px; margin-bottom: 12px; line-height: 1.4; color: var(--ink);">
+                            <div style="font-weight:bold; font-size: 0.95rem;">Subject: ${msg.subject || "No Subject"}</div>
+                            ${ccName !== "None" ? `<div style="opacity:0.85;">CC: ${ccName}</div>` : ""}
+                        </div>
+                        <div style="line-height: 1.5; color: var(--ink);">${msg.text.replace(/\n/g, '<br>')}</div>
+                    </div>
+                </div>`;
+            } else {
+                contentHTML += `<div style="text-align:left;">${msg.text.replace(/\n/g, '<br>')}</div>`;
+            }
+            
+            if (msg.fileUrl) {
+                contentHTML += `<br><a href="${msg.fileUrl}" target="_blank" class="chat-attachment"><img src="${msg.fileUrl}" style="max-width:100%; border-radius:8px; margin-top:8px;"></a>`;
+            }
+            contentHTML += `<span class="chat-time" style="display:block; text-align:right; margin-top:4px;">${new Date(msg.ts).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>`;
+            
+            bubble.innerHTML = contentHTML;
+            historyBox.appendChild(bubble);
+        }
+    });
+
+    if (!hasMessages) historyBox.innerHTML = `<div style="text-align: center; color: var(--muted); font-size: .85rem; margin-top: auto;">This is the beginning of your conversation.</div>`;
+    historyBox.scrollTop = historyBox.scrollHeight;
+}
+
+// --- RESTORED CASUAL SEARCH AUTOCOMPLETE ---
+const casualChatInputEl = document.getElementById("chat-recipient");
+const casualAutocompleteBox = document.getElementById("chat-autocomplete");
+
+casualChatInputEl?.addEventListener("input", (e) => {
     const val = e.target.value.toLowerCase();
-    if(!autocompleteBox) return;
-    autocompleteBox.innerHTML = "";
+    if(!casualAutocompleteBox) return;
+    casualAutocompleteBox.innerHTML = "";
     if (val.length < 1) {
-        autocompleteBox.hidden = true;
+        casualAutocompleteBox.hidden = true;
         return;
     }
 
@@ -1322,7 +1439,7 @@ chatInputEl?.addEventListener("input", (e) => {
     ).slice(0, 5);
     
     if (matches.length > 0) {
-        autocompleteBox.hidden = false;
+        casualAutocompleteBox.hidden = false;
         matches.forEach(match => {
             const div = document.createElement("div");
             div.className = "auto-item";
@@ -1333,69 +1450,287 @@ chatInputEl?.addEventListener("input", (e) => {
                     <span style="font-size:.75rem; color:var(--muted);">${match.empId}</span>
                 </div>
             `;
-            div.onclick = () => openChatWith(match.empId);
-            autocompleteBox.appendChild(div);
+            
+            // Explicitly target the window object to prevent crashes
+            div.onclick = () => {
+                casualAutocompleteBox.hidden = true;
+                casualChatInputEl.value = ""; 
+                window.openChatWith(match.empId);
+            };
+            casualAutocompleteBox.appendChild(div);
         });
     } else {
-        autocompleteBox.hidden = true;
+        casualAutocompleteBox.hidden = true;
     }
 });
 
 document.addEventListener("click", (e) => {
-    if (chatInputEl && autocompleteBox && !chatInputEl.contains(e.target) && !autocompleteBox.contains(e.target)) {
-        autocompleteBox.hidden = true;
+    if (casualChatInputEl && casualAutocompleteBox && !casualChatInputEl.contains(e.target) && !casualAutocompleteBox.contains(e.target)) {
+        casualAutocompleteBox.hidden = true;
     }
 });
 
-function renderChatHistory(targetEmpId) {
-    const historyBox = $("#chat-history");
-    if(!historyBox) return;
-    historyBox.innerHTML = "";
-    let hasMessages = false;
+/* ---------------------------------------------------------
+   Compose Dropdown Menu & Chat Logic
+   --------------------------------------------------------- */
+// 1. Create a sleek dropdown attached to the main Compose button
+const oldComposeBtn = document.getElementById("chat-compose-btn");
+if (oldComposeBtn) {
+    const newComposeBtn = oldComposeBtn.cloneNode(true);
+    oldComposeBtn.parentNode.replaceChild(newComposeBtn, oldComposeBtn);
 
-    allMessages.forEach(msg => {
-        if ((msg.sender === CURRENT_USER.empId && msg.receiver === targetEmpId) || 
-            (msg.sender === targetEmpId && msg.receiver === CURRENT_USER.empId)) {
-            
-            // Mark as read instantly when opening chat
-            if (msg.receiver === CURRENT_USER.empId && !msg.read) {
-                updateDoc(doc(db, "messages", msg.id), { read: true }).catch(e => console.warn(e));
-            }
-            
-            hasMessages = true;
-            const isSent = msg.sender === CURRENT_USER.empId;
-            const bubble = document.createElement("div");
-            bubble.className = `chat-bubble ${isSent ? "sent" : "received"}`;
-            
-            let contentHTML = msg.text;
-            if (msg.fileUrl) {
-                contentHTML += `<br><a href="${msg.fileUrl}" target="_blank" class="chat-attachment"><img src="${msg.fileUrl}" style="max-width:100%; border-radius:8px; margin-top:8px;"></a>`;
-            }
-            contentHTML += `<span class="chat-time">${new Date(msg.ts).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>`;
-            
-            bubble.innerHTML = contentHTML;
-            historyBox.appendChild(bubble);
+    const composeMenu = document.createElement("div");
+    composeMenu.className = "shadow-m";
+    composeMenu.style.cssText = "display: none; position: absolute; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-m); padding: 8px; z-index: 9999; flex-direction: column; gap: 4px; width: 220px;";
+    
+    composeMenu.innerHTML = `
+        <button id="menu-short-msg" style="border:none; background:transparent; text-align:left; padding: 10px 16px; cursor:pointer; font-size:.95rem; font-weight:500; border-radius:4px; display:flex; align-items:center; gap:10px; color:var(--ink);">Compose Casual</button>
+        <button id="menu-formal-msg" style="border:none; background:transparent; text-align:left; padding: 10px 16px; cursor:pointer; font-size:.95rem; font-weight:500; border-radius:4px; display:flex; align-items:center; gap:10px; color:var(--ink);">Compose Formal</button>
+    `;
+    document.body.appendChild(composeMenu);
+
+    const style = document.createElement('style');
+    style.innerHTML = `#menu-short-msg:hover, #menu-formal-msg:hover { background: var(--paper-2) !important; color: var(--brand) !important; }`;
+    document.head.appendChild(style);
+
+    newComposeBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const rect = newComposeBtn.getBoundingClientRect();
+        composeMenu.style.top = rect.bottom + 8 + "px";
+        composeMenu.style.left = rect.left + "px";
+        composeMenu.style.display = "flex";
+    });
+
+    document.addEventListener("click", (e) => {
+        if (!composeMenu.contains(e.target)) composeMenu.style.display = "none";
+    });
+
+    // Option: Casual Message
+    document.getElementById("menu-short-msg").addEventListener("click", () => {
+        document.querySelector('.chat-tab[data-tab="short"]')?.click(); 
+        composeMenu.style.display = "none";
+        if (currentView !== "messages") switchView("messages"); // Fixes the flick!
+        currentChatEmpId = null;
+        
+        const formalComposer = document.getElementById("chat-formal-composer");
+        const emptyState = document.getElementById("chat-empty-state");
+        const activeState = document.getElementById("chat-active-state");
+        const searchWrap = document.getElementById("chat-search-wrap");
+        const currentName = document.getElementById("chat-current-name");
+        const chatInput = document.getElementById("chat-recipient");
+        const historyBox = document.getElementById("chat-history");
+        
+        if(formalComposer) formalComposer.style.display = "none";
+        if(emptyState) emptyState.style.display = "none";
+        if(activeState) activeState.style.display = "flex";
+        if(searchWrap) searchWrap.hidden = false;
+        
+        if(currentName) currentName.textContent = "New Message";
+        if(chatInput) {
+            chatInput.value = "";
+            chatInput.focus();
+        }
+        if(historyBox) historyBox.innerHTML = `<div style="text-align: center; color: var(--muted); font-size: .85rem; margin-top: auto;">Search for a coworker to start chatting.</div>`;
+        document.querySelectorAll(".chat-convo").forEach(el => el.classList.remove("is-active"));
+    });
+
+    // Option: Formal Message
+    document.getElementById("menu-formal-msg").addEventListener("click", () => {
+        document.querySelector('.chat-tab[data-tab="formal"]')?.click(); 
+        composeMenu.style.display = "none";
+        if (currentView !== "messages") switchView("messages"); // Fixes the flick!
+        
+        const activeState = document.getElementById("chat-active-state");
+        const emptyState = document.getElementById("chat-empty-state");
+        const formalComposer = document.getElementById("chat-formal-composer");
+        const formalToInput = document.getElementById("formal-to-input");
+        const searchWrap = document.getElementById("chat-search-wrap");
+        
+        if(activeState) activeState.style.position = "relative"; 
+        if(emptyState) emptyState.style.display = "none";
+        if(activeState) activeState.style.display = "flex";
+        if(formalComposer) formalComposer.style.display = "flex";
+        
+        if (currentChatEmpId) {
+            const targetEmp = EMPLOYEES.find(emp => emp.empId === currentChatEmpId);
+            if(formalToInput) formalToInput.value = targetEmp ? targetEmp.name : currentChatEmpId;
+        } else {
+            if(formalToInput) formalToInput.value = "";
+            if(searchWrap) searchWrap.hidden = true; 
+        }
+        
+        const ccInput = document.getElementById("formal-cc-input");
+        const subInput = document.getElementById("formal-subject-input");
+        const bodyInput = document.getElementById("formal-body-input");
+        if(ccInput) ccInput.value = "";
+        if(subInput) subInput.value = "";
+        if(bodyInput) bodyInput.value = "";
+    });
+}
+// 2. Formal Message Logic & Themes
+let currentFormalTheme = "default";
+const formalBodyContainer = $("#formal-body-container");
+
+$$(".theme-swatch").forEach(swatch => {
+    swatch.addEventListener("click", (e) => {
+        $$(".theme-swatch").forEach(s => s.style.borderColor = "transparent");
+        if (e.target.dataset.theme === "default") e.target.style.borderColor = "var(--brand)";
+        else e.target.style.borderColor = "var(--ink)";
+        
+        currentFormalTheme = e.target.dataset.theme;
+        
+        // Instantly apply the chosen pattern to the composer background!
+        if (currentFormalTheme === "geo") {
+            formalBodyContainer.style.background = "linear-gradient(135deg, rgba(220, 231, 117, 0.4) 50%, rgba(139, 195, 74, 0.4) 50%)";
+        } else if (currentFormalTheme === "mosaic") {
+            formalBodyContainer.style.background = "repeating-linear-gradient(45deg, rgba(139, 195, 74, 0.15) 25%, transparent 25%, transparent 75%, rgba(139, 195, 74, 0.15) 75%, rgba(139, 195, 74, 0.15)), repeating-linear-gradient(45deg, rgba(139, 195, 74, 0.15) 25%, rgba(241, 248, 233, 0.4) 25%, rgba(241, 248, 233, 0.4) 75%, rgba(139, 195, 74, 0.15) 75%, rgba(139, 195, 74, 0.15))";
+            formalBodyContainer.style.backgroundPosition = "0 0, 10px 10px";
+            formalBodyContainer.style.backgroundSize = "20px 20px";
+        } else {
+            formalBodyContainer.style.background = "var(--card)";
+        }
+    });
+});
+
+// Formal Auto-complete Logic for To & Cc
+function setupFormalAutocomplete(inputId, boxId) {
+    const inputEl = $(inputId);
+    const boxEl = $(boxId);
+    
+    inputEl?.addEventListener("input", (e) => {
+        const val = e.target.value.toLowerCase();
+        boxEl.innerHTML = "";
+        if (val.length < 1) {
+            boxEl.hidden = true;
+            return;
+        }
+        const matches = EMPLOYEES.filter(emp => 
+            (emp.name.toLowerCase().includes(val) || emp.empId.toLowerCase().includes(val)) && 
+            emp.empId !== CURRENT_USER.empId
+        ).slice(0, 5);
+        
+        if (matches.length > 0) {
+            boxEl.hidden = false;
+            matches.forEach(match => {
+                const div = document.createElement("div");
+                div.className = "auto-item";
+                div.innerHTML = `${getMiniAvatar(match)}<div style="display:flex; flex-direction:column;"><b>${match.name}</b><span style="font-size:.75rem; color:var(--muted);">${match.empId}</span></div>`;
+                div.onclick = () => {
+                    inputEl.value = match.name; // Fill input with name
+                    boxEl.hidden = true;
+                };
+                boxEl.appendChild(div);
+            });
+        } else {
+            boxEl.hidden = true;
         }
     });
 
-    if (!hasMessages) {
-        const targetEmp = EMPLOYEES.find(e => e.empId === targetEmpId);
-        historyBox.innerHTML = `<div style="text-align: center; color: var(--muted); font-size: .85rem; margin-top: auto;">This is the beginning of your conversation with ${targetEmp ? targetEmp.name : targetEmpId}.</div>`;
-    }
-    historyBox.scrollTop = historyBox.scrollHeight;
+    // Close dropdown when clicking outside
+    document.addEventListener("click", (e) => {
+        if (inputEl && boxEl && !inputEl.contains(e.target) && !boxEl.contains(e.target)) {
+            boxEl.hidden = true;
+        }
+    });
 }
 
+setupFormalAutocomplete("#formal-to-input", "#formal-to-autocomplete");
+setupFormalAutocomplete("#formal-cc-input", "#formal-cc-autocomplete");
+
+function resetFormalComposer() {
+    $("#chat-formal-composer").style.display = "none";
+    $("#formal-cc-input").value = "";
+    $("#formal-subject-input").value = "";
+    $("#formal-body-input").value = "";
+    if (fileInputFormal) fileInputFormal.value = "";
+    $("#formal-attach-btn").style.color = "var(--brand)"; 
+    document.querySelector('.theme-swatch[data-theme="default"]')?.click(); // Reset theme
+}
+
+$("#formal-discard-btn")?.addEventListener("click", () => {
+    resetFormalComposer();
+    if (!currentChatEmpId) {
+        $("#chat-active-state").style.display = "none";
+        $("#chat-empty-state").style.display = "flex";
+        $("#chat-search-wrap").hidden = false;
+    }
+});
+
+const fileInputFormal = $("#formal-file-input");
+$("#formal-attach-btn")?.addEventListener("click", () => fileInputFormal?.click());
+fileInputFormal?.addEventListener("change", (e) => {
+    const file = e.target.files[0];
+    if (file && !file.type.startsWith('image/')) {
+        alert("Only image files are supported."); e.target.value = "";
+    } else if (file) {
+        $("#formal-attach-btn").style.color = "var(--present)"; 
+    }
+});
+
+$("#formal-send-btn")?.addEventListener("click", async () => {
+    const toVal = $("#formal-to-input").value.trim().toLowerCase();
+    const ccVal = $("#formal-cc-input").value.trim().toLowerCase();
+    const subjectVal = $("#formal-subject-input").value.trim();
+    const bodyVal = $("#formal-body-input").value.trim();
+    const file = fileInputFormal?.files[0];
+    
+    if (!toVal) return alert("Please specify a recipient.");
+    if (!bodyVal && !file) return alert("Message body cannot be empty.");
+
+    const toEmp = EMPLOYEES.find(emp => emp.name.toLowerCase().includes(toVal) || emp.empId.toLowerCase() === toVal);
+    if (!toEmp) return alert("Recipient not found. Double-check their Name or ID.");
+
+    let finalCcId = null;
+    if (ccVal) {
+        const ccEmp = EMPLOYEES.find(emp => emp.name.toLowerCase().includes(ccVal) || emp.empId.toLowerCase() === ccVal);
+        if (ccEmp) finalCcId = ccEmp.empId;
+        else return alert("CC recipient not found.");
+    }
+
+    const btn = $("#formal-send-btn");
+    btn.disabled = true;
+    btn.textContent = "Sending...";
+
+    try {
+        let fileUrl = null;
+        if (file) fileUrl = await compressImage(file, 800); 
+
+        await addDoc(collection(db, "messages"), {
+            sender: CURRENT_USER.empId,
+            receiver: toEmp.empId,
+            type: "formal",
+            subject: subjectVal,
+            cc: finalCcId,
+            theme: currentFormalTheme,
+            text: bodyVal,
+            fileUrl: fileUrl, 
+            ts: Date.now(),
+            read: false
+        });
+
+        resetFormalComposer();
+        if (currentChatEmpId !== toEmp.empId) window.openChatWith(toEmp.empId);
+        
+    } catch (error) {
+        console.error("Message error:", error);
+        notifyEvent("danger", "Failed to send", "Check your internet connection.");
+    } finally {
+        btn.disabled = false;
+        btn.textContent = "Send Message";
+    }
+});
+
+// 3. Restored Short Message Logic
 const chatForm = $("#chat-form");
 const chatAttachBtn = $("#chat-attach-btn");
 const chatFileInput = $("#chat-file");
+const chatInputText = $("#chat-input-text");
 
 chatAttachBtn?.addEventListener("click", () => chatFileInput?.click());
-
 chatFileInput?.addEventListener("change", (e) => {
     const file = e.target.files[0];
     if (file && !file.type.startsWith('image/')) {
-        alert("Only image files are supported.");
-        chatFileInput.value = "";
+        alert("Only image files are supported."); chatFileInput.value = "";
     } else if (file) {
         chatAttachBtn.style.color = "var(--present)"; 
     }
@@ -1403,13 +1738,8 @@ chatFileInput?.addEventListener("change", (e) => {
 
 chatForm?.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const textInput = $("#chat-input-text");
     const file = chatFileInput?.files[0];
-
-    if (!currentChatEmpId) {
-        alert("Please select someone to message.");
-        return;
-    }
+    if (!currentChatEmpId) return alert("Please select someone to message.");
 
     const submitBtn = e.target.querySelector('button[type="submit"]');
     submitBtn.disabled = true;
@@ -1417,32 +1747,142 @@ chatForm?.addEventListener("submit", async (e) => {
 
     try {
         let fileUrl = null;
-        if (file) {
-            fileUrl = await compressImage(file, 800); 
-        }
+        if (file) fileUrl = await compressImage(file, 800); 
 
         await addDoc(collection(db, "messages"), {
             sender: CURRENT_USER.empId,
             receiver: currentChatEmpId,
-            text: textInput.value,
+            type: "short",
+            text: chatInputText.value,
             fileUrl: fileUrl, 
             ts: Date.now(),
-            read: false // <--- Tells the receiver this is a new unread message
+            read: false
         });
 
-        textInput.value = "";
+        chatInputText.value = "";
         if(chatFileInput) chatFileInput.value = "";
         if(chatAttachBtn) chatAttachBtn.style.color = ""; 
         
     } catch (error) {
         console.error("Message error:", error);
-        if (error.code === 'resource-exhausted') {
-            notifyEvent("danger", "Image too large", "Please select a smaller image.");
-        } else {
-            notifyEvent("danger", "Failed to send", "Check your internet or Firebase Security Rules.");
-        }
+        notifyEvent("danger", "Failed to send", "Check your internet connection.");
     } finally {
         submitBtn.disabled = false;
         submitBtn.textContent = "Send";
     }
+});
+/* ---------------------------------------------------------
+   Admin Global Chat Audit Logic
+   --------------------------------------------------------- */
+let currentAdminChatKey = null;
+
+function renderAdminGlobalChats() {
+    const list = $("#admin-global-chat-list");
+    if (!list) return;
+    list.innerHTML = "";
+
+    const globalConvoMap = new Map();
+
+    allMessages.forEach(msg => {
+        const pair = [msg.sender, msg.receiver].sort();
+        const key = pair.join("_");
+        if (!globalConvoMap.has(key) || globalConvoMap.get(key).ts < msg.ts) {
+            globalConvoMap.set(key, msg);
+        }
+    });
+
+    const sortedGlobal = Array.from(globalConvoMap.entries()).sort((a, b) => b[1].ts - a[1].ts);
+
+    sortedGlobal.forEach(([key, latestMsg]) => {
+        const [id1, id2] = key.split("_");
+        const emp1 = EMPLOYEES.find(e => e.empId === id1);
+        const emp2 = EMPLOYEES.find(e => e.empId === id2);
+        if (!emp1 || !emp2) return; 
+
+        const div = document.createElement("div");
+        // FIX: Add a strict data-key to prevent highlighting the wrong chats!
+        div.className = `chat-convo ${currentAdminChatKey === key ? "is-active" : ""}`;
+        div.dataset.key = key; 
+        
+        let preview = latestMsg.text || "📎 Image Attached";
+        
+        div.innerHTML = `
+            <div class="chat-convo-info">
+               <div class="chat-convo-name">${emp1.name} ↔ ${emp2.name}</div>
+               <div class="chat-convo-preview">${preview}</div>
+            </div>
+        `;
+        div.onclick = () => window.openAdminGlobalChat(key, emp1, emp2);
+        list.appendChild(div);
+    });
+    
+    if (currentAdminChatKey) {
+        const [id1, id2] = currentAdminChatKey.split("_");
+        renderAdminChatHistory(id1, id2);
+    }
+}
+
+window.openAdminGlobalChat = function(key, emp1, emp2) {
+    currentAdminChatKey = key;
+    $("#admin-chat-empty").style.display = "none";
+    $("#admin-chat-active").style.display = "flex";
+    $("#admin-chat-title").textContent = `Audit: ${emp1.name} & ${emp2.name}`;
+    
+    // FIX: Safely select using the exact data-key
+    $$("#admin-global-chat-list .chat-convo").forEach(el => el.classList.remove("is-active"));
+    const activeConvoEl = document.querySelector(`#admin-global-chat-list .chat-convo[data-key="${key}"]`);
+    if (activeConvoEl) activeConvoEl.classList.add("is-active");
+
+    renderAdminChatHistory(emp1.empId, emp2.empId);
+};
+
+function renderAdminChatHistory(id1, id2) {
+    const historyBox = $("#admin-chat-history");
+    if (!historyBox) return;
+    historyBox.innerHTML = "";
+    
+    allMessages.forEach(msg => {
+        if ((msg.sender === id1 && msg.receiver === id2) || (msg.sender === id2 && msg.receiver === id1)) {
+            const senderEmp = EMPLOYEES.find(e => e.empId === msg.sender);
+            
+            const bubble = document.createElement("div");
+            bubble.style.marginBottom = "20px";
+            
+            let formalHtml = "";
+            if (msg.type === "formal") {
+                const ccEmp = msg.cc ? EMPLOYEES.find(e => e.empId === msg.cc) : null;
+                const ccName = ccEmp ? ccEmp.name : (msg.cc || "None");
+                formalHtml = `<div style="background:var(--paper-2); padding:10px 14px; border-radius:6px; margin-bottom:8px; font-size:0.85rem; border:1px solid var(--line);">
+                    <div><b>Subject:</b> ${msg.subject || "No Subject"}</div>
+                    <div style="color:var(--muted);"><b>CC:</b> ${ccName}</div>
+                </div>`;
+            }
+
+            // Clean Timeline UI Redesign
+            let contentHTML = `
+            <div style="display:flex; gap:12px; align-items:flex-start;">
+                ${getMiniAvatar(senderEmp)}
+                <div style="flex:1; min-width:0;">
+                    <div style="display:flex; align-items:baseline; gap:8px; margin-bottom:4px;">
+                        <b style="color:var(--ink); font-size:.95rem;">${senderEmp ? senderEmp.name : msg.sender}</b>
+                        <span style="font-size:0.75rem; color:var(--muted);">${new Date(msg.ts).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'})}</span>
+                    </div>
+                    ${formalHtml}
+                    <div style="font-size: .95rem; color: var(--ink); line-height: 1.5; padding-top: 4px;">
+                        ${msg.text.replace(/\n/g, '<br>')}
+                        ${msg.fileUrl ? `<br><a href="${msg.fileUrl}" target="_blank"><img src="${msg.fileUrl}" style="max-width:250px; border-radius:6px; margin-top:12px; border:1px solid var(--line); display:block;"></a>` : ''}
+                    </div>
+                </div>
+            </div>`;
+            
+            bubble.innerHTML = contentHTML;
+            historyBox.appendChild(bubble);
+        }
+    });
+    
+    historyBox.scrollTop = historyBox.scrollHeight;
+}
+
+$("#admin-chat-print-btn")?.addEventListener("click", () => {
+    window.print();
 });

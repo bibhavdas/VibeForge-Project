@@ -4,7 +4,7 @@ import { getAuth } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-aut
 import { getFirestore } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyCYuou7yJ6V2ZNtTT6RKPDQw11NPnP-B30",
+  apiKey: "AIzaSyAvgbsPA00skI3D5tKT4tLLoSKBfgBNSvA",
   authDomain: "alignt-hrms-hackathon.firebaseapp.com",
   projectId: "alignt-hrms-hackathon",
   storageBucket: "alignt-hrms-hackathon.firebasestorage.app",

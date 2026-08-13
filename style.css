@@ -796,3 +796,105 @@ svg{ width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:1.7; 
 }
 .nav-item:hover .nav-badge { border-color: var(--paper); }
 .nav-item.is-active .nav-badge { border-color: var(--brand-tint); }
+/* Force the browser to respect hidden attributes */
+[hidden] { display: none !important; }
+/* ============================================================
+   Mobile Fixes for New Split Layouts
+   ============================================================ */
+@media (max-width: 900px) {
+  /* 1. Stack the Dashboard Columns */
+  .dash-wrapper {
+    flex-direction: column;
+    gap: 32px;
+  }
+  .discord-sidebar {
+    width: 100%;
+    position: static; /* Removes the sticky behavior on mobile */
+  }
+
+  /* 2. Stack the Chat Interface */
+  .chat-layout {
+    flex-direction: column;
+    height: 80vh; /* Adapts to phone height */
+  }
+  .chat-side {
+    width: 100%;
+    max-height: 220px; /* Gives the convo list a fixed scrollable area */
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+  .chat-main {
+    flex: 1;
+  }
+  .chat-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  #chat-search-wrap {
+    width: 100% !important;
+  }
+
+  /* 3. Adjust Profile Header */
+  .profile-header-main {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 16px;
+    padding: 0 16px;
+  }
+  .profile-actions {
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-bottom: 0;
+  }
+  .profile-basic-info {
+    text-align: center;
+  }
+}
+
+@media (max-width: 720px) {
+  /* 4. Fix tight elements on tiny phone screens */
+  .hero-stats {
+    flex-direction: column;
+    gap: 12px;
+  }
+  .hero-punch-card {
+    align-items: center;
+    text-align: center;
+  }
+  .eyebrow {
+    margin-bottom: 8px;
+  }
+  #chat-form {
+    padding: 12px;
+    flex-wrap: wrap;
+  }
+}
+/* Force sidebar completely out of document flow on mobile */
+@media (max-width: 720px) {
+  .sidebar {
+    position: fixed !important;
+  }
+}
+/* ============================================================
+   Print / PDF Export Styles
+   ============================================================ */
+@media print {
+  body * {
+    visibility: hidden; /* Hide absolutely everything */
+  }
+  .print-area, .print-area * {
+    visibility: visible; /* Show only the print area */
+  }
+  .print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: auto !important; /* Allow the div to expand to multiple pages */
+    overflow: visible !important;
+    background: white !important;
+    padding: 0 !important;
+  }
+}
