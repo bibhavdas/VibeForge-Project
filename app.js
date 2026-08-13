@@ -220,7 +220,6 @@ function switchView(view, pushHistory = true){
       window.history.pushState({ view: view }, "", "?view=" + view);
   }
 
-  if (view === "profile") renderProfileView(CURRENT_USER);
   if (view === "approvals" && CURRENT_USER.role === "admin") renderAdminLeaves();
   if (view === "leave") renderEmployeeLeaves();
   if (view === "employees" && CURRENT_USER.role === "admin") initEmployees();
@@ -314,8 +313,9 @@ function setupRealtimeListeners(role) {
                   isFirstLoad = false;
               }
 
-              // FIX: Correctly check the current view and ensure we aren't in edit mode before re-rendering
-              if (currentView === "profile" && document.getElementById("profile-name-main")?.textContent === CURRENT_USER.name) {
+              // PROPER FIX: Only render CURRENT_USER if we are looking at our own profile, OR if it's a blank fresh refresh
+              const displayedName = document.getElementById("profile-name-main")?.textContent;
+              if (currentView === "profile" && (displayedName === CURRENT_USER.name || displayedName === "—")) {
                   const saveBtn = document.getElementById("save-profile-btn");
                   if (!saveBtn || saveBtn.hidden) {
                       renderProfileView(CURRENT_USER);
